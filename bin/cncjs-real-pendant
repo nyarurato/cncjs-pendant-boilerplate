@@ -1,0 +1,188 @@
+#!/usr/bin/env node
+
+var fs = require('fs');
+var path = require('path');
+var program = require('commander');
+var serialport = require('serialport');
+var inquirer = require('inquirer');
+var vorpal = require('vorpal')();
+var pkg = require('../package.json');
+var serverMain = require('../index');
+var commands = require('../commands');
+var options = {};
+
+program
+	.version(pkg.version)
+	.usage('-s <secret> -p <port> [options]')
+	.option('-l, --list', 'list available ports then exit')
+    .option('-s, --secret', 'the secret key stored in the ~/.cncrc file')
+    .option('-p, --port <port>', 'path or name of serial port')
+    .option('-P, --pendantPort <port>', 'path or name of serial port')
+    .option('-b, --baudrate <baudrate>', 'baud rate (default: 115200)', 115200)
+    .option('-B, --pendant-baudrate <baudrate>', 'baud rate (default: 115200)', 115200)
+	.option('--socket-address <address>', 'socket address or hostname (default: localhost)', 'localhost')
+	.option('--socket-port <port>', 'socket port (default: 8000)', 8000)
+	.option('--controller-type <type>', 'controller type: Grbl|Smoothie|TinyG (default: Grbl)', 'Grbl')
+    .option('--access-token-lifetime <lifetime>', 'access token lifetime in seconds or a time span string (default: 30d)', '30d')
+
+program.parse(process.argv);
+
+var options = {
+    secret: program.secret,
+    port: program.port,
+    pendantPort: program.pendantPort,
+    baudrate: program.baudrate,
+    pendantBaudrate: program.pendantBaudrate,
+    socketAddress: program.socketAddress,
+    socketPort: program.socketPort,
+    controllerType: program.controllerType,
+    accessTokenLifetime: program.accessTokenLifetime
+};
+
+var pendantSerialport;
+
+if (options.list) {
+	serialport.list().then(function(ports) {
+		ports.forEach(function(port) {
+			console.log(port.path);
+		});
+	}).catch((err) => {
+        console.error(err)
+        process.exit(1)
+    })
+	return;
+}
+
+var store = {
+    controller: {
+        state: {},
+        settings: {}
+    },
+    sender: {
+        status: {}
+    }
+};
+
+var createServer = function(options) {
+    serverMain(options, function(err, socket) {
+        // Grbl
+        socket.on('Grbl:state', function(state) {
+            store.controller.state = state;
+        });
+        socket.on('Grbl:settings', function(settings) {
+            store.controller.settings = settings;
+        });
+
+        // Smoothie
+        socket.on('Smoothie:state', function(state) {
+            store.controller.state = state;
+        });
+        socket.on('Smoothie:settings', function(settings) {
+            store.controller.settings = settings;
+        });
+
+        // TinyG
+        socket.on('TinyG:state', function(state) {
+            store.controller.state = state;
+        });
+        socket.on('TinyG:settings', function(settings) {
+            store.controller.settings = settings;
+        });
+
+        // Sender
+        socket.on('sender:status', function(data) {
+            store.sender.status = data;
+        });
+
+        
+    });
+    
+};
+
+if (options.port) {
+    createServer(options);
+    return;
+}
+
+var firstflag = true;
+
+serialport.list().then(function (ports) {
+    const choices = ports.map(function(port) {
+        return port.path;
+    });
+
+    inquirer.prompt([{
+        type: 'list',
+        name: 'port',
+        message: '\x1b[4m\x1b[31m(Control Board Port)\x1b[39m\x1b[0m Specify which port you want to use?',
+        choices: choices
+    }]).then(function(answers) {
+        options.port = answers.port;
+
+        inquirer.prompt([{
+            type: 'list',
+            name: 'port',
+            message: '\x1b[4m\x1b[34m(Pendant Board Port)\x1b[39m\x1b[0m Specify which port you want to use?',
+            choices: choices
+        }]).then(function(answers) {
+            options.pendantPort = answers.port;
+            
+            pendantSerialport = new serialport(options.pendantPort,{
+                baudRate: options.pendantBaudrate,
+                dataBits: 8,
+                parity: 'none',
+                stopBits: 1,
+                flowControl: false
+            })
+            .pipe(new serialport.parsers.Readline())
+            .on('data', function(input) {
+
+                var buffer = Buffer.from(input);
+                var jsonData;
+                try {
+                    jsonData = JSON.parse(buffer.toString('utf-8'));
+                    console.log('ax: ' + jsonData.ax);
+                    console.log('rt: ' + jsonData.rt);
+                    console.log('mv: ' + jsonData.mv);
+                    console.log('emg: ' + jsonData.emg);
+                    
+                    
+                    (function(jsonData){
+                        if(jsonData.emg == 0){
+                            if(!firstflag){
+                                socket.emit('write', options.port, "~\n");
+                            }
+                            firstflag = true;
+                            
+                            socket.emit('write', options.port, "G91\n");
+                            
+                            var line = "G0 " + jsonData.ax +  (jsonData.mv * jsonData.rt / 10.0) + "\n";
+                            socket.emit('write', options.port, line);
+
+                            socket.emit('write', options.port, "G90\n");
+                            
+                        }else{
+                            if(firstflag){
+                                socket.emit('write', options.port, "!\n");
+                                socket.emit('write', options.port, String.fromCharCode(0x18) + "\n");
+                                firstflag = false;
+                            }
+                        }
+                    })(jsonData);
+
+                } catch(e) {
+                    // データ受信がおかしい場合無視する
+                    console.log(buffer);
+                    console.log(e);
+                    return;
+                }
+            });
+
+            createServer(options);
+        });
+    });    
+
+}).catch((err) => {
+    console.error(err)
+    process.exit(1)
+})
