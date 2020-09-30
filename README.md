@@ -1,7 +1,5 @@
-# cncjs-pendant-boilerplate
-A bare minimum example to develop a cncjs pendant.
-
-![image](https://cloud.githubusercontent.com/assets/447801/22881387/2b60de08-f221-11e6-9372-288e118788a9.png)
+# cncjs-real-pendant
+Software for Pendant with SerialPort
 
 ## Installation
 ```
@@ -9,8 +7,15 @@ npm install
 ```
 
 ## Usage
-Run `bin/cncjs-pendant-boilerplate` to start the interactive client. Pass --help to `cncjs-pendant-boilerplate` for more options.
+
+Before you start this software, please check below.
+
+- Serialport name of ControlBoard (e.g. CNC xPRO)
+- Serialport name of microcontroller with cnc pendant
+- SocketPort number of CNCjs (Windows)
+
+Run `bin/cncjs-real-pendant` to start. Pass --help to `cncjs-pendant-boilerplate` for more options.
 
 ```
-bin/cncjs-pendant-boilerplate --help
+bin/cncjs-real-pendant --socket-port xxxxx
 ```
